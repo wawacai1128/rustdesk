@@ -6,10 +6,10 @@ use std::{
 };
 
 // Constants - 只保留固定FPS相关常量
-pub const FPS: u32 = 30;
-pub const MIN_FPS: u32 = 30;
+pub const FPS: u32 = 60;
+pub const MIN_FPS: u32 = 60;
 pub const MAX_FPS: u32 = 120;
-pub const INIT_FPS: u32 = 30;
+pub const INIT_FPS: u32 = 60;
 
 // Bitrate ratio constants
 const BR_MAX: f32 = 40.0;
