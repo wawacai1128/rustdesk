@@ -5,113 +5,46 @@ use std::{
     time::{Duration, Instant},
 };
 
-/*
-FPS adjust:
-a. new user connected =>set to INIT_FPS
-b. TestDelay receive => update user's fps according to network delay
-    When network delay < DELAY_THRESHOLD_150MS, set minimum fps according to image quality, and increase fps;
-    When network delay >= DELAY_THRESHOLD_150MS, set minimum fps according to image quality, and decrease fps;
-c. second timeout / TestDelay receive => update real fps to the minimum fps from all users
-
-ratio adjust:
-a. user set image quality => update to the maximum ratio of the latest quality
-b. 3 seconds timeout => update ratio according to network delay
-    When network delay < DELAY_THRESHOLD_150MS, increase ratio, max 150kbps;
-    When network delay >= DELAY_THRESHOLD_150MS, decrease ratio;
-
-adjust betwen FPS and ratio:
-    When network delay < DELAY_THRESHOLD_150MS, fps is always higher than the minimum fps, and ratio is increasing;
-    When network delay >= DELAY_THRESHOLD_150MS, fps is always lower than the minimum fps, and ratio is decreasing;
-
-delay:
-    use delay minus RTT as the actual network delay
-*/
-
-// Constants
+// Constants - 只保留固定FPS相关常量
 pub const FPS: u32 = 30;
 pub const MIN_FPS: u32 = 30;
 pub const MAX_FPS: u32 = 120;
 pub const INIT_FPS: u32 = 30;
 
-// Bitrate ratio constants for different quality levels
-const BR_MAX: f32 = 40.0; // 2000 * 2 / 100
+// Bitrate ratio constants
+const BR_MAX: f32 = 40.0;
 const BR_MIN: f32 = 0.2;
-const BR_MIN_HIGH_RESOLUTION: f32 = 0.1; // For high resolution, BR_MIN is still too high, so we set a lower limit
+const BR_MIN_HIGH_RESOLUTION: f32 = 0.1;
 const MAX_BR_MULTIPLE: f32 = 1.0;
 
-const HISTORY_DELAY_LEN: usize = 2;
-const ADJUST_RATIO_INTERVAL: usize = 3; // Adjust quality ratio every 3 seconds
-const DYNAMIC_SCREEN_THRESHOLD: usize = 2; // Allow increase quality ratio if encode more than 2 times in one second
-const DELAY_THRESHOLD_150MS: u32 = 150; // 150ms is the threshold for good network condition
+const ADJUST_RATIO_INTERVAL: usize = 3;
+const DYNAMIC_SCREEN_THRESHOLD: usize = 2;
+const DELAY_THRESHOLD_150MS: u32 = 150;
 
-#[derive(Default, Debug, Clone)]
-struct UserDelay {
-    response_delayed: bool,
-    delay_history: VecDeque<u32>,
-    fps: Option<u32>,
-    rtt_calculator: RttCalculator,
-    quick_increase_fps_count: usize,
-    increase_fps_count: usize,
-}
-
-impl UserDelay {
-    fn add_delay(&mut self, delay: u32) {
-        self.rtt_calculator.update(delay);
-        if self.delay_history.len() > HISTORY_DELAY_LEN {
-            self.delay_history.pop_front();
-        }
-        self.delay_history.push_back(delay);
-    }
-
-    // Average delay minus RTT
-    fn avg_delay(&self) -> u32 {
-        let len = self.delay_history.len();
-        if len > 0 {
-            let avg_delay = self.delay_history.iter().sum::<u32>() / len as u32;
-
-            // If RTT is available, subtract it from average delay to get actual network latency
-            if let Some(rtt) = self.rtt_calculator.get_rtt() {
-                if avg_delay > rtt {
-                    avg_delay - rtt
-                } else {
-                    avg_delay
-                }
-            } else {
-                avg_delay
-            }
-        } else {
-            DELAY_THRESHOLD_150MS
-        }
-    }
-}
-
-// User session data structure
+// 简化用户数据结构 - 删除所有延迟相关字段
 #[derive(Default, Debug, Clone)]
 struct UserData {
-    auto_adjust_fps: Option<u32>, // reserve for compatibility
     custom_fps: Option<u32>,
-    quality: Option<(i64, Quality)>, // (time, quality)
-    delay: UserDelay,
+    quality: Option<(i64, Quality)>,
     record: bool,
 }
 
 #[derive(Default, Debug, Clone)]
 struct DisplayData {
-    send_counter: usize, // Number of times encode during period
+    send_counter: usize,
     support_changing_quality: bool,
 }
 
-// Main QoS controller structure
+// 主QoS控制器
 pub struct VideoQoS {
-    fps: u32,
+    fps: u32,  // 当前FPS值
     ratio: f32,
     users: HashMap<i32, UserData>,
     displays: HashMap<String, DisplayData>,
     bitrate_store: u32,
     adjust_ratio_instant: Instant,
     abr_config: bool,
-    new_user_instant: Instant,
-    fixed_fps: Option<u32>, // 新增：固定FPS配置
+    fixed_fps: Option<u32>, // 固定FPS配置
 }
 
 impl Default for VideoQoS {
@@ -124,62 +57,54 @@ impl Default for VideoQoS {
             bitrate_store: 0,
             adjust_ratio_instant: Instant::now(),
             abr_config: true,
-            new_user_instant: Instant::now(),
-            fixed_fps: None, // 默认不固定FPS
+            fixed_fps: None,
         }
     }
 }
 
-// Basic functionality
 impl VideoQoS {
-    // 新增：设置或取消固定FPS
+    // 设置或取消固定FPS
     pub fn set_fixed_fps(&mut self, fps: Option<u32>) {
         if let Some(fps) = fps {
             // 确保FPS在有效范围内
             self.fixed_fps = Some(fps.clamp(MIN_FPS, MAX_FPS));
+            self.fps = self.fixed_fps.unwrap(); // 立即应用
         } else {
             self.fixed_fps = None;
+            self.fps = FPS; // 回退到默认FPS
         }
-        // 立即应用新帧率
-        self.adjust_fps();
     }
     
-    // 新增：获取当前固定FPS状态
+    // 获取当前固定FPS状态
     pub fn fixed_fps(&self) -> Option<u32> {
         self.fixed_fps
     }
 
-    // Calculate seconds per frame based on current FPS
+    // 计算每帧时间
     pub fn spf(&self) -> Duration {
         Duration::from_secs_f32(1. / (self.fps() as f32))
     }
 
-    // Get current FPS within valid range
+    // 获取当前FPS
     pub fn fps(&self) -> u32 {
         // 优先使用固定FPS
         if let Some(fixed_fps) = self.fixed_fps {
             return fixed_fps;
         }
-        
-        let fps = self.fps;
-        if fps >= MIN_FPS && fps <= MAX_FPS {
-            fps
-        } else {
-            FPS
-        }
+        self.fps
     }
 
-    // Store bitrate for later use
+    // 存储比特率
     pub fn store_bitrate(&mut self, bitrate: u32) {
         self.bitrate_store = bitrate;
     }
 
-    // Get stored bitrate
+    // 获取比特率
     pub fn bitrate(&self) -> u32 {
         self.bitrate_store
     }
 
-    // Get current bitrate ratio with bounds checking
+    // 获取比特率比例
     pub fn ratio(&mut self) -> f32 {
         if self.ratio < BR_MIN_HIGH_RESOLUTION || self.ratio > BR_MAX {
             self.ratio = BR_BALANCED;
@@ -187,33 +112,33 @@ impl VideoQoS {
         self.ratio
     }
 
-    // Check if any user is in recording mode
+    // 检查是否有用户正在录制
     pub fn record(&self) -> bool {
         self.users.iter().any(|u| u.1.record)
     }
 
+    // 设置是否支持改变画质
     pub fn set_support_changing_quality(&mut self, video_service_name: &str, support: bool) {
         if let Some(display) = self.displays.get_mut(video_service_name) {
             display.support_changing_quality = support;
         }
     }
 
-    // Check if variable bitrate encoding is supported and enabled
+    // 检查是否启用VBR
     pub fn in_vbr_state(&self) -> bool {
         self.abr_config && self.displays.iter().all(|e| e.1.support_changing_quality)
     }
 }
 
-// User session management
+// 用户会话管理
 impl VideoQoS {
-    // Initialize new user session
+    // 初始化新用户会话
     pub fn on_connection_open(&mut self, id: i32) {
         self.users.insert(id, UserData::default());
         self.abr_config = Config::get_option("enable-abr") != "N";
-        self.new_user_instant = Instant::now();
     }
 
-    // Clean up user session
+    // 清理用户会话
     pub fn on_connection_close(&mut self, id: i32) {
         self.users.remove(&id);
         if self.users.is_empty() {
@@ -221,7 +146,9 @@ impl VideoQoS {
         }
     }
 
+    // 用户自定义FPS (保留但不再使用)
     pub fn user_custom_fps(&mut self, id: i32, fps: u32) {
+        // 仅记录，不影响实际FPS
         if fps < MIN_FPS || fps > MAX_FPS {
             return;
         }
@@ -230,15 +157,7 @@ impl VideoQoS {
         }
     }
 
-    pub fn user_auto_adjust_fps(&mut self, id: i32, fps: u32) {
-        if fps < MIN_FPS || fps > MAX_FPS {
-            return;
-        }
-        if let Some(user) = self.users.get_mut(&id) {
-            user.auto_adjust_fps = Some(fps);
-        }
-    }
-
+    // 用户设置画质
     pub fn user_image_quality(&mut self, id: i32, image_quality: i32) {
         let convert_quality = |q: i32| -> Quality {
             if q == ImageQuality::Balanced.value() {
@@ -256,149 +175,38 @@ impl VideoQoS {
         let quality = Some((hbb_common::get_time(), convert_quality(image_quality)));
         if let Some(user) = self.users.get_mut(&id) {
             user.quality = quality;
-            // update ratio directly
+            // 直接更新比例
             self.ratio = self.latest_quality().ratio();
         }
     }
 
+    // 用户录制状态
     pub fn user_record(&mut self, id: i32, v: bool) {
         if let Some(user) = self.users.get_mut(&id) {
             user.record = v;
         }
     }
-
-    pub fn user_network_delay(&mut self, id: i32, delay: u32) {
-        // 如果启用了固定FPS，跳过所有延迟处理逻辑
-        if self.fixed_fps.is_some() {
-            return;
-        }
-        
-        let highest_fps = self.highest_fps();
-        let target_ratio = self.latest_quality().ratio();
-
-        // For bad network, small fps means quick reaction and high quality
-        let (min_fps, normal_fps) = if target_ratio >= BR_BEST {
-            (8, 16)
-        } else if target_ratio >= BR_BALANCED {
-            (10, 20)
-        } else {
-            (12, 24)
-        };
-
-        // Calculate minimum acceptable delay-fps product
-        let dividend_ms = DELAY_THRESHOLD_150MS * min_fps;
-
-        let mut adjust_ratio = false;
-        if let Some(user) = self.users.get_mut(&id) {
-            let delay = delay.max(10);
-            let old_avg_delay = user.delay.avg_delay();
-            user.delay.add_delay(delay);
-            let mut avg_delay = user.delay.avg_delay();
-            avg_delay = avg_delay.max(10);
-            let mut fps = self.fps;
-
-            // Adaptive FPS adjustment based on network delay:
-            if avg_delay < 50 {
-                user.delay.quick_increase_fps_count += 1;
-                let mut step = if fps < normal_fps { 1 } else { 0 };
-                if user.delay.quick_increase_fps_count >= 3 {
-                    // After 3 consecutive good samples, increase more aggressively
-                    user.delay.quick_increase_fps_count = 0;
-                    step = 5;
-                }
-                fps = min_fps.max(fps + step);
-            } else if avg_delay < 100 {
-                let step = if avg_delay < old_avg_delay {
-                    if fps < normal_fps {
-                        1
-                    } else {
-                        0
-                    }
-                } else {
-                    0
-                };
-                fps = min_fps.max(fps + step);
-            } else if avg_delay < DELAY_THRESHOLD_150MS {
-                fps = min_fps.max(fps);
-            } else {
-                let devide_fps = ((fps as f32) / (avg_delay as f32 / DELAY_THRESHOLD_150MS as f32))
-                    .ceil() as u32;
-                if avg_delay < 200 {
-                    fps = min_fps.max(devide_fps);
-                } else if avg_delay < 300 {
-                    fps = min_fps.min(devide_fps);
-                } else if avg_delay < 600 {
-                    fps = dividend_ms / avg_delay;
-                } else {
-                    fps = (dividend_ms / avg_delay).min(devide_fps);
-                }
-            }
-
-            if avg_delay < DELAY_THRESHOLD_150MS {
-                user.delay.increase_fps_count += 1;
-            } else {
-                user.delay.increase_fps_count = 0;
-            }
-            if user.delay.increase_fps_count >= 3 {
-                // After 3 stable samples, try increasing FPS
-                user.delay.increase_fps_count = 0;
-                fps += 1;
-            }
-
-            // Reset quick increase counter if network condition worsens
-            if avg_delay > 50 {
-                user.delay.quick_increase_fps_count = 0;
-            }
-
-            fps = fps.clamp(MIN_FPS, highest_fps);
-            // first network delay message
-            adjust_ratio = user.delay.fps.is_none();
-            user.delay.fps = Some(fps);
-        }
-        self.adjust_fps();
-        if adjust_ratio && !cfg!(target_os = "linux") {
-            //Reduce the possibility of vaapi being created twice
-            self.adjust_ratio(false);
-        }
-    }
-
-    pub fn user_delay_response_elapsed(&mut self, id: i32, elapsed: u128) {
-        // 如果启用了固定FPS，跳过响应延迟处理
-        if self.fixed_fps.is_some() {
-            return;
-        }
-        
-        if let Some(user) = self.users.get_mut(&id) {
-            user.delay.response_delayed = elapsed > 2000;
-            if user.delay.response_delayed {
-                user.delay.add_delay(elapsed as u32);
-                self.adjust_fps();
-            }
-        }
-    }
 }
 
-// Common adjust functions
+// 显示管理
 impl VideoQoS {
+    // 添加新显示
     pub fn new_display(&mut self, video_service_name: String) {
         self.displays
             .insert(video_service_name, DisplayData::default());
     }
 
+    // 移除显示
     pub fn remove_display(&mut self, video_service_name: &str) {
         self.displays.remove(video_service_name);
     }
 
+    // 更新显示数据 (只处理画质调整)
     pub fn update_display_data(&mut self, video_service_name: &str, send_counter: usize) {
-        // 如果启用了固定FPS，跳过显示更新处理
-        if self.fixed_fps.is_some() {
-            return;
-        }
-        
         if let Some(display) = self.displays.get_mut(video_service_name) {
             display.send_counter += send_counter;
         }
-        self.adjust_fps();
+        
         let abr_enabled = self.in_vbr_state();
         if abr_enabled {
             if self.adjust_ratio_instant.elapsed().as_secs() >= ADJUST_RATIO_INTERVAL as u64 {
@@ -406,9 +214,11 @@ impl VideoQoS {
                     .displays
                     .iter()
                     .any(|d| d.1.send_counter >= ADJUST_RATIO_INTERVAL * DYNAMIC_SCREEN_THRESHOLD);
+                
                 self.displays.iter_mut().for_each(|d| {
                     d.1.send_counter = 0;
                 });
+                
                 self.adjust_ratio(dynamic_screen);
             }
         } else {
@@ -416,30 +226,7 @@ impl VideoQoS {
         }
     }
 
-    #[inline]
-    fn highest_fps(&self) -> u32 {
-        let user_fps = |u: &UserData| {
-            let mut fps = u.custom_fps.unwrap_or(FPS);
-            if let Some(auto_adjust_fps) = u.auto_adjust_fps {
-                if fps == 0 || auto_adjust_fps < fps {
-                    fps = auto_adjust_fps;
-                }
-            }
-            fps
-        };
-
-        let fps = self
-            .users
-            .iter()
-            .map(|(_, u)| user_fps(u))
-            .filter(|u| *u >= MIN_FPS)
-            .min()
-            .unwrap_or(FPS);
-
-        fps.clamp(MIN_FPS, MAX_FPS)
-    }
-
-    // Get latest quality settings from all users
+    // 获取最新画质设置
     pub fn latest_quality(&self) -> Quality {
         self.users
             .iter()
@@ -451,40 +238,34 @@ impl VideoQoS {
             .1
     }
 
-    // Adjust quality ratio based on network delay and screen changes
+    // 调整画质比例
     fn adjust_ratio(&mut self, dynamic_screen: bool) {
         if !self.in_vbr_state() {
             return;
         }
-        // Get maximum delay from all users
-        let max_delay = self.users.iter().map(|u| u.1.delay.avg_delay()).max();
-        let Some(max_delay) = max_delay else {
-            return;
-        };
-
+        
         let target_quality = self.latest_quality();
         let target_ratio = self.latest_quality().ratio();
         let current_ratio = self.ratio;
         let current_bitrate = self.bitrate();
 
-        // Calculate minimum ratio for high resolution (1Mbps baseline)
+        // 计算高分辨率最小比例
         let ratio_1mbps = if current_bitrate > 0 {
             Some((current_ratio * 1000.0 / current_bitrate as f32).max(BR_MIN_HIGH_RESOLUTION))
         } else {
             None
         };
 
-        // Calculate ratio for adding 150kbps bandwidth
+        // 计算增加150kbps的比例
         let ratio_add_150kbps = if current_bitrate > 0 {
             Some((current_bitrate + 150) as f32 * current_ratio / current_bitrate as f32)
         } else {
             None
         };
 
-        // Set minimum ratio based on quality mode
+        // 设置基于画质模式的最小比例
         let min = match target_quality {
             Quality::Best => {
-                // For Best quality, ensure minimum 1Mbps for high resolution
                 let mut min = BR_BEST / 2.5;
                 if let Some(ratio_1mbps) = ratio_1mbps {
                     if min > ratio_1mbps {
@@ -505,34 +286,16 @@ impl VideoQoS {
             Quality::Low => BR_MIN_HIGH_RESOLUTION,
             Quality::Custom(_) => BR_MIN_HIGH_RESOLUTION,
         };
+        
         let max = target_ratio * MAX_BR_MULTIPLE;
-
         let mut v = current_ratio;
 
-        // Adjust ratio based on network delay thresholds
-        if max_delay < 50 {
-            if dynamic_screen {
-                v = current_ratio * 1.15;
-            }
-        } else if max_delay < 100 {
-            if dynamic_screen {
-                v = current_ratio * 1.1;
-            }
-        } else if max_delay < DELAY_THRESHOLD_150MS {
-            if dynamic_screen {
-                v = current_ratio * 1.05;
-            }
-        } else if max_delay < 200 {
-            v = current_ratio * 0.95;
-        } else if max_delay < 300 {
-            v = current_ratio * 0.9;
-        } else if max_delay < 500 {
-            v = current_ratio * 0.85;
-        } else {
-            v = current_ratio * 0.8;
+        // 根据动态屏幕调整比例
+        if dynamic_screen {
+            v = current_ratio * 1.15;
         }
 
-        // Limit quality increase rate for better stability
+        // 限制质量增加率
         if let Some(ratio_add_150kbps) = ratio_add_150kbps {
             if v > ratio_add_150kbps
                 && ratio_add_150kbps > current_ratio
@@ -544,97 +307,5 @@ impl VideoQoS {
 
         self.ratio = v.clamp(min, max);
         self.adjust_ratio_instant = Instant::now();
-    }
-
-    // Adjust fps based on network delay and user response time
-    fn adjust_fps(&mut self) {
-        // 如果启用了固定FPS，直接使用固定值
-        if let Some(fixed_fps) = self.fixed_fps {
-            self.fps = fixed_fps;
-            return;
-        }
-        
-        let highest_fps = self.highest_fps();
-        // Get minimum fps from all users
-        let mut fps = self
-            .users
-            .iter()
-            .map(|u| u.1.delay.fps.unwrap_or(INIT_FPS))
-            .min()
-            .unwrap_or(INIT_FPS);
-
-        if self.users.iter().any(|u| u.1.delay.response_delayed) {
-            if fps > MIN_FPS + 1 {
-                fps = MIN_FPS + 1;
-            }
-        }
-
-        // For new connections (within 1 second), cap fps to INIT_FPS to ensure stability
-        if self.new_user_instant.elapsed().as_secs() < 1 {
-            if fps > INIT_FPS {
-                fps = INIT_FPS;
-            }
-        }
-
-        // Ensure fps stays within valid range
-        self.fps = fps.clamp(MIN_FPS, highest_fps);
-    }
-}
-
-#[derive(Default, Debug, Clone)]
-struct RttCalculator {
-    min_rtt: Option<u32>,        // Historical minimum RTT ever observed
-    window_min_rtt: Option<u32>, // Minimum RTT within last 60 samples
-    smoothed_rtt: Option<u32>,   // Smoothed RTT estimation
-    samples: VecDeque<u32>,      // Last 60 RTT samples
-}
-
-impl RttCalculator {
-    const WINDOW_SAMPLES: usize = 60; // Keep last 60 samples
-    const MIN_SAMPLES: usize = 10; // Require at least 10 samples
-    const ALPHA: f32 = 0.5; // Smoothing factor for weighted average
-
-    /// Update RTT estimates with a new sample
-    pub fn update(&mut self, delay: u32) {
-        // 1. Update historical minimum RTT
-        match self.min_rtt {
-            Some(min_rtt) if delay < min_rtt => self.min_rtt = Some(delay),
-            None => self.min_rtt = Some(delay),
-            _ => {}
-        }
-
-        // 2. Update sample window
-        if self.samples.len() >= Self::WINDOW_SAMPLES {
-            self.samples.pop_front();
-        }
-        self.samples.push_back(delay);
-
-        // 3. Calculate minimum RTT within the window
-        self.window_min_rtt = self.samples.iter().min().copied();
-
-        // 4. Calculate smoothed RTT
-        // Use weighted average if we have enough samples
-        if self.samples.len() >= Self::WINDOW_SAMPLES {
-            if let (Some(min), Some(window_min)) = (self.min_rtt, self.window_min_rtt) {
-                // Weighted average of historical minimum and window minimum
-                let new_srtt =
-                    ((1.0 - Self::ALPHA) * min as f32 + Self::ALPHA * window_min as f32) as u32;
-                self.smoothed_rtt = Some(new_srtt);
-            }
-        }
-    }
-
-    /// Get current RTT estimate
-    /// Returns None if no valid estimation is available
-    pub fn get_rtt(&self) -> Option<u32> {
-        if let Some(rtt) = self.smoothed_rtt {
-            return Some(rtt);
-        }
-        if self.samples.len() >= Self::MIN_SAMPLES {
-            if let Some(rtt) = self.min_rtt {
-                return Some(rtt);
-            }
-        }
-        None
     }
 }
