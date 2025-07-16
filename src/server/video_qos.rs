@@ -29,9 +29,9 @@ delay:
 
 // Constants
 pub const FPS: u32 = 30;
-pub const MIN_FPS: u32 = 1;
+pub const MIN_FPS: u32 = 30;
 pub const MAX_FPS: u32 = 120;
-pub const INIT_FPS: u32 = 15;
+pub const INIT_FPS: u32 = 30;
 
 // Bitrate ratio constants for different quality levels
 const BR_MAX: f32 = 40.0; // 2000 * 2 / 100
@@ -111,6 +111,7 @@ pub struct VideoQoS {
     adjust_ratio_instant: Instant,
     abr_config: bool,
     new_user_instant: Instant,
+    fixed_fps: Option<u32>, // 新增：固定FPS配置
 }
 
 impl Default for VideoQoS {
@@ -124,12 +125,30 @@ impl Default for VideoQoS {
             adjust_ratio_instant: Instant::now(),
             abr_config: true,
             new_user_instant: Instant::now(),
+            fixed_fps: None, // 默认不固定FPS
         }
     }
 }
 
 // Basic functionality
 impl VideoQoS {
+    // 新增：设置或取消固定FPS
+    pub fn set_fixed_fps(&mut self, fps: Option<u32>) {
+        if let Some(fps) = fps {
+            // 确保FPS在有效范围内
+            self.fixed_fps = Some(fps.clamp(MIN_FPS, MAX_FPS));
+        } else {
+            self.fixed_fps = None;
+        }
+        // 立即应用新帧率
+        self.adjust_fps();
+    }
+    
+    // 新增：获取当前固定FPS状态
+    pub fn fixed_fps(&self) -> Option<u32> {
+        self.fixed_fps
+    }
+
     // Calculate seconds per frame based on current FPS
     pub fn spf(&self) -> Duration {
         Duration::from_secs_f32(1. / (self.fps() as f32))
@@ -137,6 +156,11 @@ impl VideoQoS {
 
     // Get current FPS within valid range
     pub fn fps(&self) -> u32 {
+        // 优先使用固定FPS
+        if let Some(fixed_fps) = self.fixed_fps {
+            return fixed_fps;
+        }
+        
         let fps = self.fps;
         if fps >= MIN_FPS && fps <= MAX_FPS {
             fps
@@ -244,6 +268,11 @@ impl VideoQoS {
     }
 
     pub fn user_network_delay(&mut self, id: i32, delay: u32) {
+        // 如果启用了固定FPS，跳过所有延迟处理逻辑
+        if self.fixed_fps.is_some() {
+            return;
+        }
+        
         let highest_fps = self.highest_fps();
         let target_ratio = self.latest_quality().ratio();
 
@@ -334,6 +363,11 @@ impl VideoQoS {
     }
 
     pub fn user_delay_response_elapsed(&mut self, id: i32, elapsed: u128) {
+        // 如果启用了固定FPS，跳过响应延迟处理
+        if self.fixed_fps.is_some() {
+            return;
+        }
+        
         if let Some(user) = self.users.get_mut(&id) {
             user.delay.response_delayed = elapsed > 2000;
             if user.delay.response_delayed {
@@ -356,6 +390,11 @@ impl VideoQoS {
     }
 
     pub fn update_display_data(&mut self, video_service_name: &str, send_counter: usize) {
+        // 如果启用了固定FPS，跳过显示更新处理
+        if self.fixed_fps.is_some() {
+            return;
+        }
+        
         if let Some(display) = self.displays.get_mut(video_service_name) {
             display.send_counter += send_counter;
         }
@@ -509,6 +548,12 @@ impl VideoQoS {
 
     // Adjust fps based on network delay and user response time
     fn adjust_fps(&mut self) {
+        // 如果启用了固定FPS，直接使用固定值
+        if let Some(fixed_fps) = self.fixed_fps {
+            self.fps = fixed_fps;
+            return;
+        }
+        
         let highest_fps = self.highest_fps();
         // Get minimum fps from all users
         let mut fps = self
