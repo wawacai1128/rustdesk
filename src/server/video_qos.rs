@@ -1,10 +1,10 @@
 use super::*;
-use scrap::codec::{Quality, BR_BALANCED, BR_BEST};
+use scrap::codec::{Quality, BR_BALANCED};
 use std::time::Duration;
 
 // 常量定义
-pub const FPS: u32 = 60;          // 默认FPS值
-pub const MIN_FPS: u32 = 60;       // 最小FPS值
+pub const FPS: u32 = 59;          // 默认FPS值
+pub const MIN_FPS: u32 = 59;       // 最小FPS值
 pub const MAX_FPS: u32 = 120;      // 最大FPS值
 
 // 比特率比例常量
