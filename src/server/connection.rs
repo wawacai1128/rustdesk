@@ -2796,13 +2796,13 @@ impl Connection {
                     Some(misc::Union::ElevationRequest(r)) => match r.union {
                         Some(elevation_request::Union::Direct(_)) => {
                             self.handle_elevation_request(portable_client::StartPara::Direct)
-                                。await;
+                                .await;
                         }
                         Some(elevation_request::Union::Logon(r)) => {
                             self.handle_elevation_request(portable_client::StartPara::Logon(
                                 r.username, r.password,
                             ))
-                            。await;
+                            .await;
                         }
                         _ => {}
                     },
@@ -2812,8 +2812,8 @@ impl Connection {
                             drop(std::mem::replace(&mut self.audio_sender, None));
                             self.audio_sender = Some(start_audio_thread());
                             self.audio_sender
-                                。as_ref()
-                                。map(|a| allow_err!(a.send(MediaData::AudioFormat(format))));
+                                .as_ref()
+                                .map(|a| allow_err!(a.send(MediaData::AudioFormat(format))));
                         }
                     }
                     #[cfg(feature = "flutter")]
@@ -2825,30 +2825,30 @@ impl Connection {
                                 "--switch_uuid",
                                 uuid.to_string().as_ref(),
                             ])
-                            。ok();
-                            self.on_close("switch sides"， false).await;
+                            .ok();
+                            self.on_close("switch sides", false).await;
                             return false;
                         }
                     }
-                    #[cfg(not(any(target_os = "android"， target_os = "ios")))]
+                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     Some(misc::Union::ChangeResolution(r)) => self.change_resolution(None, &r),
-                    #[cfg(not(any(target_os = "android"， target_os = "ios")))]
+                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     Some(misc::Union::ChangeDisplayResolution(dr)) => {
-                        self.change_resolution(Some(dr.display as _)， &dr.resolution)
+                        self.change_resolution(Some(dr.display as _), &dr.resolution)
                     }
-                    #[cfg(all(feature = "flutter"， feature = "plugin_framework"))]
-                    #[cfg(not(any(target_os = "android"， target_os = "ios")))]
+                    #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
+                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
                     Some(misc::Union::PluginRequest(p)) => {
                         let msg =
-                            crate::plugin::handle_client_event(&p.id， &self.lr.my_id， &p.content);
+                            crate::plugin::handle_client_event(&p.id, &self.lr.my_id, &p.content);
                         self.send(msg).await;
                     } 
                         // 已移除动态 FPS 相关功能
                     Some(misc::Union::ClientRecordStatus(status)) => 
                         video_service::VIDEO_QOS
-                            。lock()
-                            。unwrap()
-+                           .user_record(self.inner.id()， status > 0);
+                            .lock()
+                            .unwrap()
+                            .user_record(self.inner.id(), status > 0);
                     Some(misc::Union::SelectedSid(sid)) => {
                         if sid > 0 {
                             self.inner.set_selected_sid(sid);
@@ -2871,7 +2871,7 @@ impl Connection {
                                 return false;
                             }
                             if self.file_transfer.is_some() {
-                                if let Some((dir， show_hidden)) = self.delayed_read_dir.take() {
+                                if let Some((dir, show_hidden)) = self.delayed_read_dir.take() {
                                     self.read_dir(&dir, show_hidden);
                                 }
                             } else if self.view_camera {
@@ -4024,7 +4024,6 @@ impl Connection {
 
         Ok(())
     }
-}
 
 pub fn insert_switch_sides_uuid(id: String, uuid: uuid::Uuid) {
     SWITCH_SIDES_UUID
@@ -4693,11 +4692,11 @@ mod raii {
             }
             AUTHED_CONNS.lock().unwrap().retain(|c| c.conn_id != self.0);
             let remote_count = AUTHED_CONNS
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|c| c.conn_type == AuthConnType::Remote)
-                .count();
+                。lock()
+                。unwrap()
+                。iter()
+                。filter(|c| c.conn_type == AuthConnType::Remote)
+                。count();
             if remote_count == 0 {
                 #[cfg(any(target_os = "windows", target_os = "linux"))]
                 {
