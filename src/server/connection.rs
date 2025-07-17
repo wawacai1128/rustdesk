@@ -2796,13 +2796,13 @@ impl Connection {
                     Some(misc::Union::ElevationRequest(r)) => match r.union {
                         Some(elevation_request::Union::Direct(_)) => {
                             self.handle_elevation_request(portable_client::StartPara::Direct)
-                                .await;
+                                。await;
                         }
                         Some(elevation_request::Union::Logon(r)) => {
                             self.handle_elevation_request(portable_client::StartPara::Logon(
                                 r.username, r.password,
                             ))
-                            .await;
+                            。await;
                         }
                         _ => {}
                     },
@@ -2812,8 +2812,8 @@ impl Connection {
                             drop(std::mem::replace(&mut self.audio_sender, None));
                             self.audio_sender = Some(start_audio_thread());
                             self.audio_sender
-                                .as_ref()
-                                .map(|a| allow_err!(a.send(MediaData::AudioFormat(format))));
+                                。as_ref()
+                                。map(|a| allow_err!(a.send(MediaData::AudioFormat(format))));
                         }
                     }
                     #[cfg(feature = "flutter")]
@@ -2825,7 +2825,7 @@ impl Connection {
                                 "--switch_uuid",
                                 uuid.to_string().as_ref(),
                             ])
-                            .ok();
+                            。ok();
                             self.on_close("switch sides", false).await;
                             return false;
                         }
@@ -2842,15 +2842,18 @@ impl Connection {
                         let msg =
                             crate::plugin::handle_client_event(&p.id, &self.lr.my_id, &p.content);
                         self.send(msg).await;
-                    }
-                    Some(misc::Union::AutoAdjustFps(fps)) => video_service::VIDEO_QOS
+                    } 
+                        // 已移除动态 FPS 相关功能
+                    Some(misc::Union::ClientRecordStatus(status)) => video_service::VIDEO_QOS
                         .lock()
                         .unwrap()
-                        .user_auto_adjust_fps(self.inner.id(), fps),
-                    Some(misc::Union::ClientRecordStatus(status)) => 
-                        // 已移除动态 FPS 相关功能
+                        .user_record(self.inner.id(), status),
                     #[cfg(windows)]
                     Some(misc::Union::SelectedSid(sid)) => {
+                        if sid > 0 {
+                        self.inner.set_selected_sid(sid);
+                                   }
+                        }
                         if let Some(current_process_sid) =
                             crate::platform::get_current_process_session_id()
                         {
