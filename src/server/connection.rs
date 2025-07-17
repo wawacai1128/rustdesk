@@ -2826,34 +2826,34 @@ impl Connection {
                                 uuid.to_string().as_ref(),
                             ])
                             。ok();
-                            self.on_close("switch sides", false).await;
+                            self.on_close("switch sides"， false).await;
                             return false;
                         }
                     }
-                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                    #[cfg(not(any(target_os = "android"， target_os = "ios")))]
                     Some(misc::Union::ChangeResolution(r)) => self.change_resolution(None, &r),
-                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                    #[cfg(not(any(target_os = "android"， target_os = "ios")))]
                     Some(misc::Union::ChangeDisplayResolution(dr)) => {
-                        self.change_resolution(Some(dr.display as _), &dr.resolution)
+                        self.change_resolution(Some(dr.display as _)， &dr.resolution)
                     }
-                    #[cfg(all(feature = "flutter", feature = "plugin_framework"))]
-                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                    #[cfg(all(feature = "flutter"， feature = "plugin_framework"))]
+                    #[cfg(not(any(target_os = "android"， target_os = "ios")))]
                     Some(misc::Union::PluginRequest(p)) => {
                         let msg =
-                            crate::plugin::handle_client_event(&p.id, &self.lr.my_id, &p.content);
+                            crate::plugin::handle_client_event(&p.id， &self.lr.my_id， &p.content);
                         self.send(msg).await;
                     } 
                         // 已移除动态 FPS 相关功能
-                    Some(misc::Union::ClientRecordStatus(status)) => video_service::VIDEO_QOS
-                        .lock()
-                        .unwrap()
-                        .user_record(self.inner.id(), status),
-                    #[cfg(windows)]
+                    Some(misc::Union::ClientRecordStatus(status)) => 
+                        video_service::VIDEO_QOS
+                            。lock()
+                            。unwrap()
++                           .user_record(self.inner.id()， status > 0);
                     Some(misc::Union::SelectedSid(sid)) => {
                         if sid > 0 {
-                        self.inner.set_selected_sid(sid);
-                                   }
+                            self.inner.set_selected_sid(sid);
                         }
+                    }
                         if let Some(current_process_sid) =
                             crate::platform::get_current_process_session_id()
                         {
@@ -2871,7 +2871,7 @@ impl Connection {
                                 return false;
                             }
                             if self.file_transfer.is_some() {
-                                if let Some((dir, show_hidden)) = self.delayed_read_dir.take() {
+                                if let Some((dir， show_hidden)) = self.delayed_read_dir.take() {
                                     self.read_dir(&dir, show_hidden);
                                 }
                             } else if self.view_camera {
