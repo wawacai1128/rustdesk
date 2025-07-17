@@ -851,7 +851,7 @@ impl Connection {
                     }
                     if conn.is_authed_remote_conn() || conn.view_camera {
                         if let Some(last_test_delay) = conn.last_test_delay {
-                            video_service::VIDEO_QOS.lock().unwrap().user_delay_response_elapsed(id, last_test_delay.elapsed().as_millis());
+                        // 已移除动态 FPS 相关功能
                         }
                     }
                 }
@@ -2178,11 +2178,7 @@ impl Connection {
                 if let Some(tm) = self.last_test_delay {
                     self.last_test_delay = None;
                     let new_delay = tm.elapsed().as_millis() as u32;
-                    video_service::VIDEO_QOS
-                        .lock()
-                        .unwrap()
-                        .user_network_delay(self.inner.id(), new_delay);
-                    self.network_delay = new_delay;
+                    // 已移除动态 FPS 相关功能
                 }
             }
         } else if let Some(message::Union::SwitchSidesResponse(_s)) = msg.union {
@@ -2851,10 +2847,8 @@ impl Connection {
                         .lock()
                         .unwrap()
                         .user_auto_adjust_fps(self.inner.id(), fps),
-                    Some(misc::Union::ClientRecordStatus(status)) => video_service::VIDEO_QOS
-                        .lock()
-                        .unwrap()
-                        .user_record(self.inner.id(), status),
+                    Some(misc::Union::ClientRecordStatus(status)) => 
+                        // 已移除动态 FPS 相关功能
                     #[cfg(windows)]
                     Some(misc::Union::SelectedSid(sid)) => {
                         if let Some(current_process_sid) =
@@ -3389,10 +3383,7 @@ impl Connection {
             }
         }
         if o.custom_fps > 0 {
-            video_service::VIDEO_QOS
-                .lock()
-                .unwrap()
-                .user_custom_fps(self.inner.id(), o.custom_fps as _);
+            // 已移除动态 FPS 相关功能
         }
         if let Some(q) = o.supported_decoding.clone().take() {
             scrap::codec::Encoder::update(scrap::codec::EncodingUpdate::Update(self.inner.id(), q));
